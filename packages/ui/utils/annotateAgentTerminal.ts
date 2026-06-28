@@ -23,7 +23,12 @@ export function resolveAnnotateAgentId(
 }
 
 export function resolveAgentTerminalWebSocketUrl(path: string): string {
-  const url = new URL(path, window.location.href);
+  // When served under a base path (e.g. /plannotator/<token> via the hapi hub tunnel), the
+  // PTY WS path is root-relative and must be prefixed — otherwise resolving it against
+  // location.href discards the base path and the WS misses the tunnel. See adr/0003.
+  const basePath =
+    (window as unknown as { __PLANNOTATOR_BASE_PATH__?: string }).__PLANNOTATOR_BASE_PATH__ ?? "";
+  const url = new URL(basePath + path, window.location.href);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   return url.toString();
 }
