@@ -15,6 +15,8 @@
 import type { Origin } from "@plannotator/shared/agents";
 import { resolve } from "path";
 import { isRemoteSession, getServerHostname, getServerPort } from "./remote";
+import { getBasePathFromEnv, injectBasePath, basePathFromUrl } from "./base-path";
+import { registerWithHapiHub } from "./hub-mode";
 import { openEditorDiff } from "./ide";
 import {
   saveToObsidian,
@@ -131,6 +133,10 @@ export async function startPlannotatorServer(
   const { plan, origin, htmlContent, permissionMode, sharingEnabled = true, shareBaseUrl, pasteApiUrl, onReady, mode, customPlanPath } = options;
 
   const isRemote = isRemoteSession();
+  const hubMode = process.env.PLANNOTATOR_HUB_MODE === "1" || process.env.PLANNOTATOR_HUB_MODE === "true";
+  // Base path the served client must prefix its URLs with (set via env when the
+  // hub launches plannotator, or derived from `hapi tunnel register` below).
+  let activeBasePath = getBasePathFromEnv();
   const configuredPort = getServerPort();
   const wslFlag = await isWSL();
   const gitUser = detectGitUser();
@@ -574,7 +580,7 @@ export async function startPlannotatorServer(
           if (url.pathname === "/favicon.svg") return handleFavicon();
 
           // Serve embedded HTML for all other routes (SPA)
-          return new Response(htmlContent, {
+          return new Response(injectBasePath(htmlContent, activeBasePath), {
             headers: { "Content-Type": "text/html" },
           });
         },
@@ -614,14 +620,27 @@ export async function startPlannotatorServer(
   const port = server.port!;
   const serverUrl = `http://localhost:${port}`;
 
+  // Hub mode: expose this server through the hapi hub and open the public URL
+  // (instead of localhost). Derive the base path from the returned URL so the
+  // served client prefixes its fetch/WS/SSE URLs. Falls back to localhost when
+  // `hapi` is absent or registration fails. See adr/0003.
+  let openUrl = serverUrl;
+  if (hubMode) {
+    const registration = registerWithHapiHub(port, process.env.PLANNOTATOR_MODE, process.env.PLANNOTATOR_LABEL);
+    if (registration) {
+      activeBasePath = basePathFromUrl(registration.publicUrl) || activeBasePath;
+      openUrl = registration.publicUrl;
+    }
+  }
+
   // Notify caller that server is ready
   if (onReady) {
-    onReady(serverUrl, isRemote, port);
+    onReady(openUrl, isRemote, port);
   }
 
   return {
     port,
-    url: serverUrl,
+    url: openUrl,
     isRemote,
     waitForDecision: () => decisionPromise,
     ...(donePromise && { waitForDone: () => donePromise }),

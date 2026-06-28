@@ -78,33 +78,32 @@ the tunnel.
 
 ## Phase 1 implementation notes
 
-**Done (head-start):** `packages/server/hub-mode.ts` —
-`registerWithHapiHub(port, mode?, label?)` shells `hapi tunnel register`,
-parses the public URL from stdout, and returns it (or `null` when `hapi` is
-absent / rejected, so callers fall back to localhost). Pure + unit-tested
-(`buildRegisterArgs`, `parsePublicUrl`, success/fail/spawn-error paths).
+**Done — Phase 1 plannotator (serves under a base path + self-registers with the hub):**
 
-**Remaining for a working Phase 1 tunnel** (hub already strips
-`/plannotator/<token>` before forwarding, so plannotator's server *routes* need
-no change — only the served client must know its base path):
+- `packages/server/hub-mode.ts` — `registerWithHapiHub(port, mode?, label?)` shells
+  `hapi tunnel register`, returns the public URL (or null → localhost fallback).
+  Split into `buildRegisterArgs`/`parsePublicUrl` for testing.
+- `packages/server/base-path.ts` — `normalizeBasePath`/`getBasePathFromEnv`/
+  `basePathFromUrl`/`injectBasePath`. The hub strips `/plannotator/<token>` before
+  forwarding, so the server *routes* are unchanged; instead `injectBasePath`
+  inserts a `window.__PLANNOTATOR_BASE_PATH__` global + a tiny shim (right after
+  `<head>`) that prefixes root-relative `fetch`/`EventSource`/`WebSocket` URLs.
+  Single injection point — **no client edits, no UI rebuild needed**.
+- `packages/server/index.ts` — reads `PLANNOTATOR_BASE_PATH` (hub sets it when
+  launching) and `PLANNOTATOR_HUB_MODE`; serves `injectBasePath(htmlContent,
+  activeBasePath)`; in hub mode calls `registerWithHapiHub` on server-ready,
+  derives the base path from the returned URL, and opens the public URL instead
+  of `localhost`.
 
-- **Env flags** (`packages/server/index.ts`): read `PLANNOTATOR_HUB_MODE` and
-  `PLNOTATOR_BASE_PATH` (the hub sets both when it launches plannotator).
-- **Wire hub-mode** into the mode entrypoints' `onReady` (`packages/server/index.ts:619`):
-  in hub mode, call `registerWithHapiHub(port, mode, label)` on server-ready and
-  open the returned `publicUrl` instead of `http://localhost:${port}` (`:615`).
-- **Inject the base path into the served HTML** (`packages/server/index.ts:577`,
-  `htmlContent` option at `:74`/`:131`): template a
-  `window.__PLANNOTATOR_BASE_PATH__` global (or `<base href>`) into the
-  single-file HTML at serve time so the client can prefix its URLs.
-- **Prefix client URLs** — the fetch layer lives across `packages/ui/*`
-  (`config/configStore.ts`, `hooks/usePlanDiff.ts`·`useAIChat.ts`·`useAnnotationDraft.ts`·`useArchive.ts`,
-  `components/AgentsTab.tsx`·`Settings.tsx`·`OpenInAppButton.tsx`·`AttachmentsButton.tsx` … ~15 files use root-relative `/api/…`).
-  Either prefix each call with the global, or convert to relative + `<base href>`.
-  Also the PTY WebSocket (`agent-terminal.ts`) and SSE streams
-  (`external-annotations.ts`, `/api/ai/query`, `/api/agents/jobs/stream`).
-  Requires a UI rebuild.
-- **Phase 5:** drop plannotator's `ExitPlanMode` hook on hapi-driven agents
-  (`apps/hook/hooks/hooks.json`).
-- **Phase 6:** scope settings cookies to `Path=/plannotator/<token>` (or key
-  storage by token) to avoid collisions across concurrent sessions on one origin.
+Both helpers are pure and runtime-verified. (The formal `bun test` run is
+blocked by a pre-existing missing `@happy-dom` UI-test dep in this checkout;
+full `tsc` is blocked by uninstalled `@plannotator/shared/*` workspace deps —
+neither related to these changes.)
+
+**Remaining:** Phase 5 — drop plannotator's `ExitPlanMode` hook on hapi-driven
+agents (`apps/hook/hooks/hooks.json`); Phase 6 — scope settings cookies to
+`Path=/plannotator/<token>`. The shim prefixes string URLs starting with `/`; a
+future PTY WebSocket (Phase 4) that builds an absolute `ws://host/...` URL from
+`location` will need host-relative prefixing then. A proper upstream-able
+base-path refactor (per-call prefixing in `packages/ui/*` instead of the shim)
+can follow.
