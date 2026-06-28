@@ -1513,10 +1513,14 @@ const ReviewApp: React.FC = () => {
       return;
     }
     const annotation = allAnnotationsRef.current.find(a => a.id === id);
-    // Ignore navigation to an annotation that's gone (deleted) or filtered out of
-    // the active PR/diff-scope — there's nothing in the current diff to scroll to
-    // or highlight, so don't fake a selection.
+    // An annotation that's gone (deleted) or filtered out of the active
+    // PR/diff-scope has nothing in the current diff to scroll to or highlight,
+    // so don't fake a selection on it. Clear the current selection instead of
+    // silently no-opping, so the click still gives visible feedback rather than
+    // appearing broken (e.g. after an in-place PR switch leaves stale sidebar
+    // cards listed).
     if (!annotation || !annotationMatchesPrScope(annotation, prMetadata?.url, prDiffScope)) {
+      setSelectedAnnotationId(null);
       return;
     }
     if (!isAllFilesActiveRef.current) {
