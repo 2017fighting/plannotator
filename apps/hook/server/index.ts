@@ -840,6 +840,7 @@ if (args[0] === "sessions") {
     worktreePool,
     sharingEnabled,
     shareBaseUrl,
+    label: isPRMode ? `${getMRLabel(prMetadata!).toLowerCase()}-review-${getDisplayRepo(prMetadata!)}${getMRNumberLabel(prMetadata!)}` : `review-${reviewProject}`,
     htmlContent: reviewHtmlContent,
     onCleanup: worktreeCleanup,
     onReady: async (url, isRemote, port) => {
@@ -1035,6 +1036,9 @@ if (args[0] === "sessions") {
     pasteApiUrl,
     gate: gateFlag,
     rawHtml,
+    label: folderPath
+      ? `annotate-${path.basename(folderPath)}`
+      : `annotate-${isUrl ? hostnameOrFallback(absolutePath) : path.basename(absolutePath)}`,
     renderHtml: !!rawHtml,
     convertHtml: renderMarkdownFlag,
     agentCwd: projectRoot,
@@ -1236,6 +1240,7 @@ if (args[0] === "sessions") {
     shareBaseUrl,
     pasteApiUrl,
     gate: gateFlag,
+    label: "annotate-last",
     htmlContent: planHtmlContent,
     recentMessages: pickerMessages,
     onReady: async (url, isRemote, port) => {
@@ -1796,6 +1801,15 @@ if (args[0] === "sessions") {
   // ============================================
   // PLAN REVIEW MODE (default)
   // ============================================
+
+  // hapi owns ExitPlanMode on its driven agents (its permissionHandler intercepts the
+  // event and launches plannotator through the tunnel — see hapi
+  // adr/0001-plannotator-tunnel.md §Phase 5). When this hook fires under a hapi-spawned
+  // session, passthrough (exit 0, no stdout) so the two don't double-handle the same
+  // event. Standalone, non-hapi agents never have HAPI_DRIVEN set and are unaffected.
+  if (process.env.HAPI_DRIVEN === "1") {
+    process.exit(0);
+  }
 
   // Read hook event from stdin
   const eventJson = await Bun.stdin.text();

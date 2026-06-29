@@ -10,6 +10,8 @@
  */
 
 import { isRemoteSession, getServerHostname, getServerPort } from "./remote";
+import { getBasePathFromEnv, injectBasePath, basePathFromUrl } from "./base-path";
+import { registerWithHapiHub } from "./hub-mode";
 import type { Origin } from "@plannotator/shared/agents";
 import { type DiffType, type GitContext, runVcsDiff, getVcsFileContentsForDiff, getVcsDiffFingerprint, canStageFiles, stageFile, unstageFile, resolveVcsCwd, validateFilePath, getVcsContext, detectRemoteDefaultCompareTarget, gitRuntime } from "./vcs";
 import { basename } from "node:path";
@@ -122,6 +124,8 @@ export interface ReviewServerOptions {
   sharingEnabled?: boolean;
   /** Custom base URL for share links (default: https://share.plannotator.ai) */
   shareBaseUrl?: string;
+  /** Label forwarded to the hapi hub when registering under hub mode (toast title). */
+  label?: string;
   /** Called when server starts with the URL, remote status, and port */
   onReady?: (url: string, isRemote: boolean, port: number) => void;
   /** OpenCode client for querying available agents (OpenCode only) */
@@ -177,7 +181,7 @@ const RETRY_DELAY_MS = 500;
 export async function startReviewServer(
   options: ReviewServerOptions
 ): Promise<ReviewServerResult> {
-  const { htmlContent, origin, gitContext, sharingEnabled = true, shareBaseUrl, onReady } = options;
+  const { htmlContent, origin, gitContext, sharingEnabled = true, shareBaseUrl, label, onReady } = options;
 
   let prMetadata = options.prMetadata;
   const isPRMode = !!prMetadata;
@@ -756,6 +760,10 @@ export async function startReviewServer(
   const aiRuntime = await createAIRuntime({ getCwd: resolveAgentCwd });
 
   const isRemote = isRemoteSession();
+  // Hub mode: serve under the hapi hub's base path and self-register so the
+  // review UI is reachable at https://<hub>/plannotator/<token>. See adr/0003.
+  const hubMode = process.env.PLANNOTATOR_HUB_MODE === "1" || process.env.PLANNOTATOR_HUB_MODE === "true";
+  let activeBasePath = getBasePathFromEnv();
   const configuredPort = getServerPort();
   const wslFlag = await isWSL();
   const gitUser = detectGitUser();
@@ -1760,7 +1768,7 @@ export async function startReviewServer(
           if (url.pathname === "/favicon.svg") return handleFavicon();
 
           // Serve embedded HTML for all other routes (SPA)
-          return new Response(htmlContent, {
+          return new Response(injectBasePath(htmlContent, activeBasePath), {
             headers: { "Content-Type": "text/html" },
           });
         },
@@ -1802,14 +1810,27 @@ export async function startReviewServer(
   const exitHandler = () => agentJobs.killAll();
   process.once("exit", exitHandler);
 
+  // Hub mode: expose this server through the hapi hub and open the public URL
+  // (instead of localhost). Derive the base path from the returned URL so the
+  // served client prefixes its fetch/WS/SSE URLs. Falls back to localhost when
+  // `hapi` is absent or registration fails. See adr/0003.
+  let openUrl = serverUrl;
+  if (hubMode) {
+    const registration = registerWithHapiHub(port, "review", label);
+    if (registration) {
+      activeBasePath = basePathFromUrl(registration.publicUrl) || activeBasePath;
+      openUrl = registration.publicUrl;
+    }
+  }
+
   // Notify caller that server is ready
   if (onReady) {
-    onReady(serverUrl, isRemote, port);
+    onReady(openUrl, isRemote, port);
   }
 
   return {
     port,
-    url: serverUrl,
+    url: openUrl,
     isRemote,
     waitForDecision: () => decisionPromise,
     stop: () => {

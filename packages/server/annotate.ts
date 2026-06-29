@@ -12,6 +12,8 @@
  */
 
 import { isRemoteSession, getServerHostname, getServerPort } from "./remote";
+import { getBasePathFromEnv, injectBasePath, basePathFromUrl } from "./base-path";
+import { registerWithHapiHub } from "./hub-mode";
 import { getRepoInfo } from "./repo";
 import type { Origin } from "@plannotator/shared/agents";
 import { handleImage, handleUpload, handleServerReady, handleDraftSave, handleDraftLoad, handleDraftDelete, handleFavicon, handleSaveNotes, readDraftGenerationFromBody, readDraftGenerationFromUrl } from "./shared-handlers";
@@ -73,6 +75,8 @@ export interface AnnotateServerOptions {
   sharingEnabled?: boolean;
   /** Custom base URL for share links */
   shareBaseUrl?: string;
+  /** Label forwarded to the hapi hub when registering under hub mode (toast title). */
+  label?: string;
   /** Base URL of the paste service API for short URL sharing */
   pasteApiUrl?: string;
   /** Source attribution: original URL or filename (e.g. "https://..." or "index.html") */
@@ -146,6 +150,7 @@ export async function startAnnotateServer(
     sourceConverted,
     sharingEnabled = true,
     shareBaseUrl,
+    label,
     pasteApiUrl,
     gate = false,
     rawHtml,
@@ -156,6 +161,10 @@ export async function startAnnotateServer(
   } = options;
 
   const isRemote = isRemoteSession();
+  // Hub mode: serve under the hapi hub's base path and self-register so the
+  // annotate UI is reachable at https://<hub>/plannotator/<token>. See adr/0003.
+  const hubMode = process.env.PLANNOTATOR_HUB_MODE === "1" || process.env.PLANNOTATOR_HUB_MODE === "true";
+  let activeBasePath = getBasePathFromEnv();
   const configuredPort = getServerPort();
   const wslFlag = await isWSL();
   const gitUser = detectGitUser();
@@ -597,7 +606,7 @@ export async function startAnnotateServer(
           if (url.pathname === "/favicon.svg") return handleFavicon();
 
           // Serve embedded HTML for all other routes (SPA)
-          return new Response(htmlContent, {
+          return new Response(injectBasePath(htmlContent, activeBasePath), {
             headers: { "Content-Type": "text/html" },
           });
         },
@@ -642,14 +651,29 @@ export async function startAnnotateServer(
   const port = server.port!;
   const serverUrl = `http://localhost:${port}`;
 
+  // Hub mode: expose this server through the hapi hub and open the public URL
+  // (instead of localhost). Derive the base path from the returned URL so the
+  // served client prefixes its fetch/WS/SSE URLs. Falls back to localhost when
+  // `hapi` is absent or registration fails. See adr/0003. The annotate server
+  // covers the annotate / annotate-last / annotate-folder UI modes; all three
+  // register as "annotate" (the hub's notification gate value).
+  let openUrl = serverUrl;
+  if (hubMode) {
+    const registration = registerWithHapiHub(port, "annotate", label);
+    if (registration) {
+      activeBasePath = basePathFromUrl(registration.publicUrl) || activeBasePath;
+      openUrl = registration.publicUrl;
+    }
+  }
+
   // Notify caller that server is ready
   if (onReady) {
-    onReady(serverUrl, isRemote, port);
+    onReady(openUrl, isRemote, port);
   }
 
   return {
     port,
-    url: serverUrl,
+    url: openUrl,
     isRemote,
     waitForDecision: () => decisionPromise,
     stop: () => {

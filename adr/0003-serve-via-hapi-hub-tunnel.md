@@ -100,10 +100,21 @@ blocked by a pre-existing missing `@happy-dom` UI-test dep in this checkout;
 full `tsc` is blocked by uninstalled `@plannotator/shared/*` workspace deps —
 neither related to these changes.)
 
-**Remaining:** Phase 5 — drop plannotator's `ExitPlanMode` hook on hapi-driven
-agents (`apps/hook/hooks/hooks.json`); Phase 6 — scope settings cookies to
-`Path=/plannotator/<token>`. The shim prefixes string URLs starting with `/`; a
-future PTY WebSocket (Phase 4) that builds an absolute `ws://host/...` URL from
-`location` will need host-relative prefixing then. A proper upstream-able
-base-path refactor (per-call prefixing in `packages/ui/*` instead of the shim)
-can follow.
+**Phase 5 — done.** plannotator's `ExitPlanMode` `PermissionRequest` hook now self-disables on
+hapi-driven agents: the runner sets `HAPI_DRIVEN=1` on every spawned agent session
+(`hapi cli/src/runner/run.ts`), and the plan-review hook branch in `apps/hook/server/index.ts`
+exits 0 (passthrough) when that marker is present, so hapi — which owns the ExitPlanMode event and
+launches plannotator through the tunnel — does not double-handle it. `apps/hook/hooks/hooks.json`
+is unchanged, so standalone, non-hapi agents keep today's behavior. The self-started review and
+annotate modes (`packages/server/review.ts`, `packages/server/annotate.ts`) now self-register with
+the hub under `PLANNOTATOR_HUB_MODE`, emitting the locked mode strings `'review'` / `'annotate'`
+(all annotate UI variants — `annotate`, `annotate-last`, `annotate-folder` — register as
+`'annotate'`) and opening the returned public URL; this is what the hub's `{review, annotate}`
+notification gate keys on. (`PLANNOTATOR_MODE`/`PLANNOTATOR_LABEL` env vars remain unused for these
+self-started paths — the plan-review server reads them only because hapi sets them when it launches
+plan-review.)
+
+**Remaining:** Phase 6 — scope settings cookies to `Path=/plannotator/<token>`. The shim prefixes
+string URLs starting with `/`; a future PTY WebSocket (Phase 4) that builds an absolute
+`ws://host/...` URL from `location` will need host-relative prefixing then. A proper upstream-able
+base-path refactor (per-call prefixing in `packages/ui/*` instead of the shim) can follow.
